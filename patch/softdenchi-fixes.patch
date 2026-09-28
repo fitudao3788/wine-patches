@@ -1,0 +1,475 @@
+diff --git a/dlls/crypt32/base64.c b/dlls/crypt32/base64.c
+index 298756ca541..b0fc892c053 100644
+--- a/dlls/crypt32/base64.c
++++ b/dlls/crypt32/base64.c
+@@ -299,6 +299,79 @@ static BOOL BinaryToHexRawA(const BYTE *bin, DWORD nbin, DWORD flags, char *str,
+     return TRUE;
+ }
+ 
++static BOOL binary_to_hexA(const BYTE *bin, DWORD nbin, DWORD flags, char *str, DWORD *nstr)
++{
++    static const char hex[] = "0123456789abcdef";
++    DWORD needed, i;
++
++    needed = nbin * 3; /* spaces + terminating \0 */
++
++    if (flags & CRYPT_STRING_NOCR)
++    {
++        needed += (nbin + 7) / 16; /* space every 16 characters */
++        needed += 1; /* terminating \n */
++    }
++    else if (!(flags & CRYPT_STRING_NOCRLF))
++    {
++        needed += (nbin + 7) / 16; /* space every 16 characters */
++        needed += nbin / 16 + 1; /* LF every 16 characters + terminating \r */
++
++        if (nbin % 16)
++            needed += 1; /* terminating \n */
++    }
++
++    if (!str)
++    {
++        *nstr = needed;
++        return TRUE;
++    }
++
++    if (needed > *nstr)
++    {
++        SetLastError(ERROR_MORE_DATA);
++        return FALSE;
++    }
++
++    for (i = 0; i < nbin; i++)
++    {
++        *str++ = hex[(bin[i] >> 4) & 0xf];
++        *str++ = hex[bin[i] & 0xf];
++
++        if (i >= nbin - 1) break;
++
++        if (i && !(flags & CRYPT_STRING_NOCRLF))
++        {
++            if (!((i + 1) % 16))
++            {
++                if (flags & CRYPT_STRING_NOCR)
++                    *str++ = '\n';
++                else
++                {
++                    *str++ = '\r';
++                    *str++ = '\n';
++                }
++                continue;
++            }
++            else if (!((i + 1) % 8))
++                *str++ = ' ';
++        }
++
++        *str++ = ' ';
++    }
++
++    if (flags & CRYPT_STRING_NOCR)
++        *str++ = '\n';
++    else if (!(flags & CRYPT_STRING_NOCRLF))
++    {
++        *str++ = '\r';
++        *str++ = '\n';
++    }
++
++    *str = 0;
++    *nstr = needed - 1;
++    return TRUE;
++}
++
+ BOOL WINAPI CryptBinaryToStringA(const BYTE *pbBinary,
+  DWORD cbBinary, DWORD dwFlags, LPSTR pszString, DWORD *pcchString)
+ {
+@@ -333,6 +406,8 @@ BOOL WINAPI CryptBinaryToStringA(const BYTE *pbBinary,
+         encoder = BinaryToHexRawA;
+         break;
+     case CRYPT_STRING_HEX:
++        encoder = binary_to_hexA;
++        break;
+     case CRYPT_STRING_HEXASCII:
+     case CRYPT_STRING_HEXADDR:
+     case CRYPT_STRING_HEXASCIIADDR:
+diff --git a/dlls/crypt32/tests/base64.c b/dlls/crypt32/tests/base64.c
+index 2263b236fa8..6b43216f9af 100644
+--- a/dlls/crypt32/tests/base64.c
++++ b/dlls/crypt32/tests/base64.c
+@@ -610,6 +610,38 @@ static void test_CryptBinaryToString(void)
+         ok(strLen == strLen2, "%lu: Expected length %ld, got %ld\n", i, strLen, strLen2);
+         ok(!memcmp(hex, cmp, strLen * sizeof(WCHAR)), "%lu: got %s\n", i, wine_dbgstr_wn(hex, strLen));
+ 
++        /* CRYPT_STRING_HEX with CryptBinaryToStringA */
++        cmp_a = malloc(strLen * sizeof(WCHAR) + 256);
++        for (j = 0; cmp[j]; j++)
++            cmp_a[j] = cmp[j];
++        cmp_a[j] = 0;
++
++        strLen = 0;
++        ret = CryptBinaryToStringA(input, sizes[k], CRYPT_STRING_HEX | flags[i], NULL, &strLen);
++        ok(ret, "CryptBinaryToStringA failed: %ld\n", GetLastError());
++        ok(strLen == strLen2 + 1, "%lu: Expected length %ld, got %ld\n", i, strLen2 + 1, strLen);
++
++        hex_a = malloc(strLen + 256);
++        memset(hex_a, 0xcc, strLen);
++        ret = CryptBinaryToStringA(input, sizes[k], CRYPT_STRING_HEX | flags[i], hex_a, &strLen);
++        ok(ret, "CryptBinaryToStringA failed: %ld\n", GetLastError());
++        ok(strLen == strLen2, "%lu: Expected length %ld, got %ld\n", i, strLen, strLen2);
++        ok(!memcmp(hex_a, cmp_a, strLen), "%lu: got %s\n", i, hex_a);
++
++        /* no writes if buffer too small */
++        strLen = strLen2 - 1;
++        memset(hex_a, 0xcc, strLen2);
++        SetLastError(0xdeadbeef);
++        ret = CryptBinaryToStringA(input, sizes[k], CRYPT_STRING_HEX | flags[i], hex_a, &strLen);
++        ok(!ret && GetLastError() == ERROR_MORE_DATA,
++           "%lu: Expected ERROR_MORE_DATA, got ret=%d le=%lu\n", i, ret, GetLastError());
++        ok(strLen == strLen2 - 1, "%lu: Expected length %ld, got %ld\n", i, strLen2 - 1, strLen);
++        ok((unsigned char)hex_a[0] == 0xcc, "%lu: got %#x.\n", i, (unsigned char)hex_a[0]);
++
++        free(hex_a);
++        free(cmp_a);
++        strLen = strLen2;
++
+         /* adjusts size if buffer too big */
+         strLen *= 2;
+         ret = CryptBinaryToStringW(input, sizes[k], CRYPT_STRING_HEX | flags[i], hex, &strLen);
+diff --git a/dlls/imagehlp/integrity.c b/dlls/imagehlp/integrity.c
+index ebad7001548..f1c6581550c 100644
+--- a/dlls/imagehlp/integrity.c
++++ b/dlls/imagehlp/integrity.c
+@@ -631,30 +631,6 @@ BOOL WINAPI ImageGetCertificateHeader(
+     return TRUE;
+ }
+ 
+-/* Finds the section named section in the array of IMAGE_SECTION_HEADERs hdr.  If
+- * found, returns the offset to the section.  Otherwise returns 0.  If the section
+- * is found, optionally returns the size of the section (in size) and the base
+- * address of the section (in base.)
+- */
+-static DWORD IMAGEHLP_GetSectionOffset( IMAGE_SECTION_HEADER *hdr,
+-    DWORD num_sections, LPCSTR section, PDWORD size, PDWORD base )
+-{
+-    DWORD i, offset = 0;
+-
+-    for( i = 0; !offset && i < num_sections; i++, hdr++ )
+-    {
+-        if( !memcmp( hdr->Name, section, strlen(section) ) )
+-        {
+-            offset = hdr->PointerToRawData;
+-            if( size )
+-                *size = hdr->SizeOfRawData;
+-            if( base )
+-                *base = hdr->VirtualAddress;
+-        }
+-    }
+-    return offset;
+-}
+-
+ /* Calls DigestFunction e bytes at offset offset from the file mapped at map.
+  * Returns the return value of DigestFunction, or FALSE if the data is not available.
+  */
+@@ -669,24 +645,6 @@ static BOOL IMAGEHLP_ReportSectionFromOffset( DWORD offset, DWORD size,
+     return DigestFunction( DigestHandle, map + offset, size );
+ }
+ 
+-/* Finds the section named section among the IMAGE_SECTION_HEADERs in
+- * section_headers and calls DigestFunction for this section.  Returns
+- * the return value from DigestFunction, or FALSE if the data could not be read.
+- */
+-static BOOL IMAGEHLP_ReportSection( IMAGE_SECTION_HEADER *section_headers,
+-    DWORD num_sections, LPCSTR section, BYTE *map, DWORD fileSize,
+-    DIGEST_FUNCTION DigestFunction, DIGEST_HANDLE DigestHandle )
+-{
+-    DWORD offset, size = 0;
+-
+-    offset = IMAGEHLP_GetSectionOffset( section_headers, num_sections, section,
+-        &size, NULL );
+-    if( !offset )
+-        return FALSE;
+-    return IMAGEHLP_ReportSectionFromOffset( offset, size, map, fileSize,
+-            DigestFunction, DigestHandle );
+-}
+-
+ /* Calls DigestFunction for all sections with the IMAGE_SCN_CNT_CODE flag set.
+  * Returns the return value from * DigestFunction, or FALSE if a section could not be read.
+  */
+@@ -705,40 +663,41 @@ static BOOL IMAGEHLP_ReportCodeSections( IMAGE_SECTION_HEADER *hdr, DWORD num_se
+     return ret;
+ }
+ 
+-/* Reports the import section from the file FileHandle.  If
+- * CERT_PE_IMAGE_DIGEST_ALL_IMPORT_INFO is set in DigestLevel, reports the entire
+- * import section.
+- * FIXME: if it's not set, the function currently fails.
++/* Calls DigestFunction for every section that does not have the
++ * IMAGE_SCN_CNT_CODE flag set (those were already reported by
++ * IMAGEHLP_ReportCodeSections), in their natural on-disk order.  This also
++ * covers sections with no special name, such as ".orpc" in MIDL-generated
++ * proxy/stub DLLs.  ".rsrc", ".debug" and ".idata" are only reported if the
++ * matching CERT_PE_IMAGE_DIGEST_* bit is set in DigestLevel.
++ * Returns the return value from DigestFunction, or FALSE if a section
++ * could not be read.
+  */
+-static BOOL IMAGEHLP_ReportImportSection( IMAGE_SECTION_HEADER *hdr,
+-    DWORD num_sections, BYTE *map, DWORD fileSize, DWORD DigestLevel,
+-    DIGEST_FUNCTION DigestFunction, DIGEST_HANDLE DigestHandle )
++static BOOL IMAGEHLP_ReportRemainingSections( IMAGE_SECTION_HEADER *hdr, DWORD num_sections,
++    BYTE *map, DWORD fileSize, DWORD DigestLevel, DIGEST_FUNCTION DigestFunction, DIGEST_HANDLE DigestHandle )
+ {
+-    BOOL ret = FALSE;
+-    DWORD offset, size, base;
+-
+-    /* Get import data */
+-    offset = IMAGEHLP_GetSectionOffset( hdr, num_sections, ".idata", &size,
+-        &base );
+-    if( !offset )
+-        return FALSE;
++    DWORD i;
++    BOOL ret = TRUE;
+ 
+-    /* If CERT_PE_IMAGE_DIGEST_ALL_IMPORT_INFO is set, the entire
+-     * section is reported.  Otherwise, the debug info section is
+-     * decoded and reported piecemeal.  See tests.  However, I haven't been
+-     * able to figure out how the native implementation decides which values
+-     * to report.  Either it's buggy or my understanding is flawed.
+-     */
+-    if( DigestLevel & CERT_PE_IMAGE_DIGEST_ALL_IMPORT_INFO )
+-        ret = IMAGEHLP_ReportSectionFromOffset( offset, size, map, fileSize,
+-                DigestFunction, DigestHandle );
+-    else
++    for( i = 0; ret && i < num_sections; i++, hdr++ )
+     {
+-        FIXME("not supported except for CERT_PE_IMAGE_DIGEST_ALL_IMPORT_INFO\n");
+-        SetLastError(ERROR_INVALID_PARAMETER);
+-        ret = FALSE;
++        if( hdr->Characteristics & IMAGE_SCN_CNT_CODE ) continue;
++
++        /* a section with nothing on disk isn't part of the digest */
++        if( !hdr->SizeOfRawData ) continue;
++
++        if( !strncmp( (const char *)hdr->Name, ".rsrc", sizeof(hdr->Name) ) &&
++            !(DigestLevel & CERT_PE_IMAGE_DIGEST_RESOURCES) )
++            continue;
++        if( !strncmp( (const char *)hdr->Name, ".debug", sizeof(hdr->Name) ) &&
++            !(DigestLevel & CERT_PE_IMAGE_DIGEST_DEBUG_INFO) )
++            continue;
++        if( !strncmp( (const char *)hdr->Name, ".idata", sizeof(hdr->Name) ) &&
++            !(DigestLevel & CERT_PE_IMAGE_DIGEST_ALL_IMPORT_INFO) )
++            continue;
++
++        ret = IMAGEHLP_ReportSectionFromOffset( hdr->PointerToRawData,
++            hdr->SizeOfRawData, map, fileSize, DigestFunction, DigestHandle );
+     }
+-
+     return ret;
+ }
+ 
+@@ -830,11 +789,15 @@ BOOL WINAPI ImageGetDigestStream(
+     nt_hdr = (IMAGE_NT_HEADERS *)(map + offset);
+     if( nt_hdr->Signature != IMAGE_NT_SIGNATURE )
+         goto invalid_parameter;
+-    /* It's clear why the checksum is cleared, but why only these size headers?
++    /* Only the checksum and the certificate table directory entry are
++     * cleared before hashing the header.
+      */
+-    nt_hdr->OptionalHeader.SizeOfInitializedData = 0;
+-    nt_hdr->OptionalHeader.SizeOfImage = 0;
+     nt_hdr->OptionalHeader.CheckSum = 0;
++    if (nt_hdr->OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_SECURITY)
++    {
++        nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress = 0;
++        nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size = 0;
++    }
+     size = sizeof(nt_hdr->Signature) + sizeof(nt_hdr->FileHeader) +
+         nt_hdr->FileHeader.SizeOfOptionalHeader;
+     ret = DigestFunction( DigestHandle, map + offset, size );
+@@ -852,20 +815,13 @@ BOOL WINAPI ImageGetDigestStream(
+         goto end;
+ 
+     section_headers = (IMAGE_SECTION_HEADER *)(map + offset);
++    /* report the code section(s), then every other section in its
++     * on-disk order
++     */
+     IMAGEHLP_ReportCodeSections( section_headers, num_sections,
+         map, fileSize, DigestFunction, DigestHandle );
+-    IMAGEHLP_ReportSection( section_headers, num_sections, ".data",
+-        map, fileSize, DigestFunction, DigestHandle );
+-    IMAGEHLP_ReportSection( section_headers, num_sections, ".rdata",
+-        map, fileSize, DigestFunction, DigestHandle );
+-    IMAGEHLP_ReportImportSection( section_headers, num_sections,
++    IMAGEHLP_ReportRemainingSections( section_headers, num_sections,
+         map, fileSize, DigestLevel, DigestFunction, DigestHandle );
+-    if( DigestLevel & CERT_PE_IMAGE_DIGEST_DEBUG_INFO )
+-        IMAGEHLP_ReportSection( section_headers, num_sections, ".debug",
+-            map, fileSize, DigestFunction, DigestHandle );
+-    if( DigestLevel & CERT_PE_IMAGE_DIGEST_RESOURCES )
+-        IMAGEHLP_ReportSection( section_headers, num_sections, ".rsrc",
+-            map, fileSize, DigestFunction, DigestHandle );
+ 
+ end:
+     if( map )
+diff --git a/dlls/imagehlp/tests/image.c b/dlls/imagehlp/tests/image.c
+index 4d7a6f5bdfe..a29b4199a8d 100644
+--- a/dlls/imagehlp/tests/image.c
++++ b/dlls/imagehlp/tests/image.c
+@@ -309,7 +309,7 @@ static void free_updates(struct update_accum *accum)
+ 
+ static const struct expected_blob b1[] = {
+     {FILE_PE_START,  &bin},
+-    /* with zeroed Checksum/SizeOfInitializedData/SizeOfImage fields */
++    /* with a zeroed Checksum field */
+     {sizeof(bin.nt_headers), &bin.nt_headers},
+     {sizeof(bin.sections),  &bin.sections},
+     {FILE_IDATA-FILE_TEXT, &bin.text_section},
+@@ -325,7 +325,7 @@ static const struct expected_update_accum a1 = { ARRAY_SIZE(b1), b1, TRUE };
+ 
+ static const struct expected_blob b2[] = {
+     {FILE_PE_START,  &bin},
+-    /* with zeroed Checksum/SizeOfInitializedData/SizeOfImage fields */
++    /* with a zeroed Checksum field */
+     {sizeof(bin.nt_headers), &bin.nt_headers},
+     {sizeof(bin.sections),  &bin.sections},
+     {FILE_IDATA-FILE_TEXT, &bin.text_section},
+@@ -335,7 +335,7 @@ static const struct expected_update_accum a2 = { ARRAY_SIZE(b2), b2, FALSE };
+ 
+ static const struct expected_blob b3[] = {
+     {FILE_PE_START,  &bin64},
+-    /* with zeroed Checksum/SizeOfInitializedData/SizeOfImage fields */
++    /* with a zeroed Checksum field */
+     {sizeof(bin64.nt_headers), &bin64.nt_headers},
+     {sizeof(bin64.sections),  &bin64.sections},
+     {FILE_IDATA - FILE_TEXT, &bin64.text_section},
+@@ -350,7 +350,7 @@ static const struct expected_update_accum a3 = { ARRAY_SIZE(b3), b3, TRUE };
+ 
+ static const struct expected_blob b4[] = {
+     {FILE_PE_START,  &bin64},
+-    /* with zeroed Checksum/SizeOfInitializedData/SizeOfImage fields */
++    /* with a zeroed Checksum field */
+     {sizeof(bin64.nt_headers), &bin64.nt_headers},
+     {sizeof(bin64.sections),  &bin64.sections},
+     {FILE_IDATA - FILE_TEXT, &bin64.text_section},
+@@ -432,10 +432,8 @@ static void test_get_digest_stream(void)
+     WriteFile(file, &bin, sizeof(bin), &count, NULL);
+     FlushFileBuffers(file);
+ 
+-    /* zero out some fields ImageGetDigestStream would zero out */
++    /* zero out the field ImageGetDigestStream would zero out */
+     bin.nt_headers.OptionalHeader.CheckSum = 0;
+-    bin.nt_headers.OptionalHeader.SizeOfInitializedData = 0;
+-    bin.nt_headers.OptionalHeader.SizeOfImage = 0;
+ 
+     ret = ImageGetDigestStream(file, 0, accumulating_stream_output, &accum);
+     ok(ret, "ImageGetDigestStream failed: %ld\n", GetLastError());
+@@ -464,8 +462,6 @@ static void test_get_digest_stream(void)
+     FlushFileBuffers(file);
+ 
+     bin64.nt_headers.OptionalHeader.CheckSum = 0;
+-    bin64.nt_headers.OptionalHeader.SizeOfInitializedData = 0;
+-    bin64.nt_headers.OptionalHeader.SizeOfImage = 0;
+ 
+     ret = ImageGetDigestStream(file, 0, accumulating_stream_output, &accum);
+     ok(ret, "ImageGetDigestStream failed: %lu\n", GetLastError());
+diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
+index d3f22435f55..aad314ad040 100644
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -773,6 +773,12 @@ LONG WINAPI UnhandledExceptionFilter( EXCEPTION_POINTERS *epointers )
+             TerminateProcess( GetCurrentProcess(), 1 );
+         }
+ 
++        /* an unhandled breakpoint with no debugger attached doesn't launch
++         * winedbg on native Windows, it resumes past it instead
++         */
++        if (rec->ExceptionCode == STATUS_BREAKPOINT || rec->ExceptionCode == STATUS_WX86_BREAKPOINT)
++            return EXCEPTION_CONTINUE_SEARCH;
++
+         nested = rec->ExceptionFlags & EXCEPTION_NESTED_CALL;
+         if (top_filter && !nested)
+         {
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index 24cd05877b4..2dd3e558a15 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1615,6 +1615,20 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL
+ 
+     if (first_chance) return call_user_exception_dispatcher( rec, context );
+ 
++    /* an unhandled breakpoint with no debugger attached doesn't kill the
++     * process on native Windows, it resumes past the int3 instead
++     */
++    if (!peb->BeingDebugged &&
++        (rec->ExceptionCode == STATUS_BREAKPOINT || rec->ExceptionCode == STATUS_WX86_BREAKPOINT))
++    {
++#if defined(__x86_64__)
++        context->Rip++;
++#elif defined(__i386__)
++        context->Eip++;
++#endif
++        return NtContinue( context, FALSE );
++    }
++
+     if (rec->ExceptionFlags & EXCEPTION_STACK_INVALID)
+         ERR_(seh)("Exception frame is not in stack limits => unable to dispatch exception.\n");
+     else if (rec->ExceptionCode == STATUS_NONCONTINUABLE_EXCEPTION)
+diff --git a/dlls/rpcrt4/rpc_transport.c b/dlls/rpcrt4/rpc_transport.c
+index 8d53e7cee35..fdd549a564e 100644
+--- a/dlls/rpcrt4/rpc_transport.c
++++ b/dlls/rpcrt4/rpc_transport.c
+@@ -116,6 +116,11 @@ static RPC_STATUS rpcrt4_conn_open_pipe(RpcConnection *Connection, LPCSTR pname,
+   RpcConnection_np *npc = (RpcConnection_np *) Connection;
+   HANDLE pipe;
+   DWORD err, dwMode;
++  /* a freshly activated local server can register its OXID before its
++   * named pipe is open for connections, so retry for a while instead of
++   * failing the first attempt
++   */
++  DWORD not_found_retries_left = 100; /* ~5 seconds at 50ms each */
+ 
+   TRACE("connecting to %s\n", pname);
+ 
+@@ -157,6 +162,12 @@ static RPC_STATUS rpcrt4_conn_open_pipe(RpcConnection *Connection, LPCSTR pname,
+       TRACE("connection failed, error=%lx\n", err);
+       return RPC_S_SERVER_TOO_BUSY;
+     }
++    if (wait && (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) && not_found_retries_left)
++    {
++      not_found_retries_left--;
++      Sleep(50);
++      continue;
++    }
+     if (!wait || !WaitNamedPipeA(pname, NMPWAIT_WAIT_FOREVER)) {
+       err = GetLastError();
+       WARN("connection failed, error=%lx\n", err);
+diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
+index 64d445af090..73946ac6e0c 100644
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -638,6 +638,27 @@ NTSTATUS WINAPI wow64_NtRaiseException( UINT *args )
+     void *context32 = get_ptr( &args );
+     BOOL first_chance = get_ulong( &args );
+ 
++    /* as in NtRaiseException, an unhandled breakpoint with no debugger
++     * attached resumes past the int3 instead of killing the process;
++     * do it directly on the 32-bit guest context here, since
++     * raise_exception() only sees a fresh native trampoline context
++     */
++    if (!first_chance && !NtCurrentTeb()->Peb->BeingDebugged &&
++        (rec32->ExceptionCode == STATUS_BREAKPOINT || rec32->ExceptionCode == STATUS_WX86_BREAKPOINT))
++    {
++        switch (current_machine)
++        {
++        case IMAGE_FILE_MACHINE_I386:
++            ((I386_CONTEXT *)context32)->Eip++;
++            break;
++        case IMAGE_FILE_MACHINE_ARMNT:
++            ((ARM_CONTEXT *)context32)->Pc += 2;
++            break;
++        }
++        pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, context32 );
++        return STATUS_SUCCESS;
++    }
++
+     pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, context32 );
+     raise_exception( rec32, context32, first_chance, exception_record_32to64( rec32 ));
+     return STATUS_SUCCESS;
