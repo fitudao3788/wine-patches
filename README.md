@@ -32,6 +32,7 @@ cd wine-11.0
 git apply ../softdenchi-fixes.patch
 
 # build Wine
+./configure --enable-archs=i386,x86_64
 make -j$(nproc)
 
 # install Wine
