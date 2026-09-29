@@ -39,6 +39,41 @@ make -j$(nproc)
 sudo make install
 ```
 
+### Arch Linux
+```
+# install dependency
+sudo pacman -Sy
+sudo pacman -S base-devel git lib32-glibc mingw-w64-gcc \
+     alsa-lib bluez libpulse dbus fontconfig \
+     freetype2 gnutls mesa libunwind libx11 \
+     libxcomposite libxcursor libxfixes libxi \
+     libxrandr libxrender libxext wayland \
+     libglvnd libxkbcommon gstreamer \
+     gst-plugins-base-libs sdl2 systemd \
+     vulkan-icd-loader vulkan-headers \
+     libcups libgphoto2 sane krb5 smbclient \
+     ocl-icd libpcap libusb v4l-utils
+
+# clone Wine
+git clone -b wine-11.0 https://gitlab.winehq.org/wine/wine.git wine-11.0
+
+# download patches
+curl -O https://raw.githubusercontent.com/fitudao3788/wine-patches/refs/heads/wine-11.0/patch/softdenchi-fixes.patch
+# or
+wget https://raw.githubusercontent.com/fitudao3788/wine-patches/refs/heads/wine-11.0/patch/softdenchi-fixes.patch
+
+# patch Wine
+cd wine-11.0
+git apply ../softdenchi-fixes.patch
+
+# build Wine
+./configure --enable-archs=i386,x86_64
+make -j$(nproc)
+
+# install Wine
+sudo make install
+```
+
 ## License
 This patch modifies files that are part of [Wine](https://www.winehq.org/),
 which is licensed under the GNU Lesser General Public License version 2.1
