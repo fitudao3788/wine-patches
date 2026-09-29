@@ -39,7 +39,7 @@ make -j$(nproc)
 sudo make install
 ```
 
-### Arch Linux
+### Arch Linux (amd64)
 ```
 # install dependency
 sudo pacman -Sy
