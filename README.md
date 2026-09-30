@@ -17,7 +17,8 @@ sudo apt install -y build-essential bison flex \
      libsdl2-dev libudev-dev libvulkan-dev libcapi20-dev \
      libcups2-dev libgphoto2-dev libsane-dev libkrb5-dev \
      samba-dev ocl-icd-opencl-dev libpcap-dev libusb-1.0-0-dev \
-     libv4l-dev
+     libv4l-dev libavcodec-dev libavformat-dev libavutil-dev \
+     gettext libpcsclite-dev
 
 # clone Wine
 git clone -b wine-11.0 https://gitlab.winehq.org/wine/wine.git wine-11.0
