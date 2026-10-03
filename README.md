@@ -1,5 +1,6 @@
+![fitudao3788%2Fwine-patches](https://count.getloli.com/@fitudao3788%2Fwine-patches?theme=asoul&padding=7&offset=0&align=top&scale=1.0&pixelated=1&darkmode=auto)
 # wine-patches
-Some useful patches for Wine
+Some useful patches for Wine  
 
 ## Usage
 ### Debian / Ubuntu (amd64)
